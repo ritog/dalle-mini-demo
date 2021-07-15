@@ -4,20 +4,6 @@ import wandb
 
 import subprocess
 
-st.title("Demo for DALL-E Mini")
-
-st.write("This is a demo for DALL-E Mini, an Open Source AI model that generates images from nothing but a text prompt")
-
-api_in_flag = st.text_input("Enter your wandb API key (not stored):", key="wandbkey")
-
-if api_in_flag:
-    p1 = subprocess.run(f'wandb login {st.session_state.wandbkey}', capture_output=True, shell=True)
-    st.write(p1.stderr)
-    st.write('Here\'s your image:\n')
-    st.write(st.session_state.prompt)
-
-st.text_input("What do you want to generate?", key="prompt")
-
 import random
 
 import jax
@@ -41,6 +27,14 @@ from torchvision.transforms import InterpolationMode
 
 
 from modeling_flax_vqgan import VQModel
+
+
+st.title("Demo for DALL-E Mini")
+
+st.write("This is a demo for DALL-E Mini, an Open Source AI model that generates images from nothing but a text prompt")
+
+api_in_flag = st.text_input("Enter your wandb API key (not stored):", key="wandbkey")
+
 
 OUTPUT_VOCAB_SIZE = 16384 + 1  # encoded image token space + 1 for bos
 OUTPUT_LENGTH = 256 + 1  # number of encoded tokens + 1 for bos
@@ -85,79 +79,83 @@ class CustomFlaxBartForConditionalGenerationModule(FlaxBartForConditionalGenerat
 class CustomFlaxBartForConditionalGeneration(FlaxBartForConditionalGeneration):
     module_class = CustomFlaxBartForConditionalGenerationModule
 
-run = wandb.init()
-artifact = run.use_artifact('wandb/hf-flax-dalle-mini/model-1ef8yxby:latest', type='bart_model')
-artifact_dir = artifact.download()
-
-# create our model and initialize it randomly
-tokenizer = BartTokenizer.from_pretrained(BASE_MODEL)
-model = CustomFlaxBartForConditionalGeneration.from_pretrained(artifact_dir)
-model.config.force_bos_token_to_be_generated = False
-model.config.forced_bos_token_id = None
-model.config.forced_eos_token_id = None
-
-model.config.temperature = 4.
-
-vqgan = VQModel.from_pretrained("flax-community/vqgan_f16_16384")
-
-def custom_to_pil(x):
-    x = np.clip(x, 0., 1.)
-    x = (255*x).astype(np.uint8)
-    x = Image.fromarray(x)
-    if not x.mode == "RGB":
-        x = x.convert("RGB")
-    return x
-
-def generate(input, rng, params):
-  return model.generate(
-      **input,
-      max_length=257,
-      num_beams=1,
-      do_sample=True,
-      prng_key=rng,
-      eos_token_id=50000,
-      pad_token_id=50000,
-      params=params
-  )
-
-def get_images(indices, params):
-    return vqgan.decode_code(indices, params=params)
-
-p_generate = jax.pmap(generate, "batch")
-p_get_images = jax.pmap(get_images, "batch")
-
-bart_params = replicate(model.params)
-vqgan_params = replicate(vqgan.params)
-
-prompt = [st.session_state.prompt]
-inputs = tokenizer(prompt, return_tensors='jax', padding="max_length", truncation=True, max_length=128).data
-inputs = shard(inputs)
 
 
-key = random.randint(0, 1e6) # chage this to get different output
-rngs = jax.random.PRNGKey(key)
-rngs = jax.random.split(rngs, jax.local_device_count())
+if api_in_flag:
+    p1 = subprocess.run(f'wandb login {st.session_state.wandbkey}', capture_output=True, shell=True)
+    st.write(p1.stderr)
+    st.write('Here\'s your image:\n')
+
+    seq = st.text_input("What do you want to generate?", key="prompt")
+    
+    if seq:
+
+        run = wandb.init()
+        artifact = run.use_artifact('wandb/hf-flax-dalle-mini/model-1ef8yxby:latest', type='bart_model')
+        artifact_dir = artifact.download()
+
+        # create our model and initialize it randomly
+        tokenizer = BartTokenizer.from_pretrained(BASE_MODEL)
+        model = CustomFlaxBartForConditionalGeneration.from_pretrained(artifact_dir)
+        model.config.force_bos_token_to_be_generated = False
+        model.config.forced_bos_token_id = None
+        model.config.forced_eos_token_id = None
+
+        model.config.temperature = 4.
+
+        vqgan = VQModel.from_pretrained("flax-community/vqgan_f16_16384")
+
+        
+        def custom_to_pil(x):
+            x = np.clip(x, 0., 1.)
+            x = (255*x).astype(np.uint8)
+            x = Image.fromarray(x)
+            if not x.mode == "RGB":
+                x = x.convert("RGB")
+            return x
+
+        def generate(input, rng, params):
+            return model.generate(
+            **input,
+            max_length=257,
+            num_beams=1,
+            do_sample=True,
+            prng_key=rng,
+            eos_token_id=50000,
+            pad_token_id=50000,
+            params=params
+        )
+
+        def get_images(indices, params):
+            return vqgan.decode_code(indices, params=params)
 
 
-indices = p_generate(
-    inputs,
-    rngs,
-    bart_params,
-).sequences # takes a while to compile, after the first call, should be pretty fast
-indices = indices[:, :, 1:]
+        p_generate = jax.pmap(generate, "batch")
+        p_get_images = jax.pmap(get_images, "batch")
 
-images = p_get_images(indices, vqgan_params)
-images = np.squeeze(np.asarray(images), 1)
+        bart_params = replicate(model.params)
+        vqgan_params = replicate(vqgan.params)
 
-custom_to_pil(images[0])
+        prompt = [st.session_state.prompt]
+        inputs = tokenizer(prompt, return_tensors='jax', padding="max_length", truncation=True, max_length=128).data
+        inputs = shard(inputs)
 
 
+        key = random.randint(0, 1e6) # chage this to get different output
+        rngs = jax.random.PRNGKey(key)
+        rngs = jax.random.split(rngs, jax.local_device_count())
 
-latest_iteration = st.empty()
-bar = st.progress(0)
 
-for i in range(100):
-    latest_iteration.text(f'Working on it: {i+1}')
-    bar.progress(i+1)
+        indices = p_generate(
+            inputs,
+            rngs,
+            bart_params,
+        ).sequences # takes a while to compile, after the first call, should be pretty fast
+        indices = indices[:, :, 1:]
 
+        images = p_get_images(indices, vqgan_params)
+        images = np.squeeze(np.asarray(images), 1)
+
+        img = custom_to_pil(images[0])
+        st.write(img)
 
