@@ -17,15 +17,12 @@ for i in range(100):
     latest_iteration.text(f'Working on it: {i+1}')
     bar.progress(i+1)
 
-st.text_input("Enter your wandb API key (not stored):", key="wandbkey")
+api_in_flag = st.text_input("Enter your wandb API key (not stored):", key="wandbkey")
 
 # subprocess.run(args=st.session_state.wandbkey, stdin=f"wandb login {st.session_state.wandbkey}", shell=True)
 
-p1 = subprocess.run(f'wandb login {st.session_state.wandbkey}', capture_output=True, shell=True)
-st.write(p1.stderr)
-
-
-st.write('Here\'s your image:\n')
-
-
-st.write(st.session_state.prompt)
+if api_in_flag:
+    p1 = subprocess.run(f'wandb login {st.session_state.wandbkey}', capture_output=True, shell=True)
+    st.write(p1.stderr)
+    st.write('Here\'s your image:\n')
+    st.write(st.session_state.prompt)
